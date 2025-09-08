@@ -40,29 +40,24 @@ function encryptAes256Gcm(plaintext: string, key: Buffer) {
   };
 }
 
-function decryptAes256Gcm({
-  encrypted,
-  iv,
-  authTag,
-  key,
-}: {
+function decryptAes256Gcm({ encrypted, iv, authTag, key }: {
   encrypted: string;
   iv: string;
   authTag: string;
-  key: Buffer;
+  key: string; // agora aceitando chave hex
 }): string {
   const decipher = crypto.createDecipheriv(
     "aes-256-gcm",
-    key,
-    Buffer.from(iv, "base64")
+    Buffer.from(key, "hex"), // converte hex para 32 bytes
+    Buffer.from(iv, "hex")
   );
-  decipher.setAuthTag(Buffer.from(authTag, "base64"));
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(encrypted, "base64")),
-    decipher.final(),
-  ]);
-  return decrypted.toString("utf8");
+  decipher.setAuthTag(Buffer.from(authTag, "hex"));
+  let decrypted = decipher.update(encrypted, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
 }
+
+
 
 app.get("/internTest", async (_req: Request, res: Response) => {
   try {
@@ -86,7 +81,7 @@ app.get("/internTest", async (_req: Request, res: Response) => {
         encrypted: encrypted.encrypted,
         iv: encrypted.iv,
         authTag: encrypted.authTag,
-        key: localKey,
+        key: '',
       })
     );
 
@@ -116,60 +111,57 @@ app.get("/internTest", async (_req: Request, res: Response) => {
 app.post("/run", async (_req: Request, res: Response) => {
   try {
     if (!ENCRYPTED_ENDPOINT) {
-      return res.status(500).json({ error: "ENCRYPTED_ENDPOINT não configurado." });
-    }
-    if (!DecryptKEY.length) {
-      return res.status(500).json({ error: "DecryptKEY não configurada no .env" });
+      return res.status(500).json({ error: "ENCRYPTED_ENDPOINT is not configured" });
     }
 
+    // Buscar payload do endpoint seguro
     const resp = await fetch(ENCRYPTED_ENDPOINT);
     if (!resp.ok) {
-      return res.status(502).json({ error: "Erro ao buscar endpoint seguro", status: resp.status });
+      return res.status(502).json({ error: "Error fetching secure endpoint", status: resp.status });
     }
     const payload = await resp.json();
-    console.log(payload)
 
     const { encrypted, iv, authTag } = payload.data.encrypted;
+    const secretKey = payload.data.secretKey;
 
-    if (!encrypted || !iv || !authTag) {
-      return res.status(400).json({ error: "Payload inválido do endpoint seguro." });
+    if (!encrypted || !iv || !authTag || !secretKey) {
+      return res.status(400).json({ error: "Invalid payload from secure endpoint" });
     }
 
+    // Descriptografar usando a chave que veio no payload
     const decryptedText = decryptAes256Gcm({
       encrypted,
       iv,
       authTag,
-      key: DecryptKEY,
+      key: secretKey, // já vem no payload
     });
 
-    let dataObj: Record<string, unknown>;
-    try {
-      dataObj = JSON.parse(decryptedText);
-    } catch {
-      dataObj = { raw: decryptedText };
-    }
+    const dataObj = JSON.parse(decryptedText);
 
-    if (!N8N_WEBHOOK_URL) {
-      return res.status(500).json({ error: "N8N_WEBHOOK_URL não configurado." });
-    }
+    // Reutilizar addUser
+    let addUserResult: any;
+    const fakeRes = {
+      status: (_code: number) => ({
+        json: (data: any) => {
+          addUserResult = data;
+          return data;
+        },
+      }),
+    } as unknown as Response;
 
-    const n8nResp = await fetch(N8N_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(dataObj),
+    await addUser({ body: dataObj } as Request, fakeRes);
+
+    return res.json({
+      plaintext: dataObj,
+      addUserResponse: addUserResult,
     });
-
-    if (!n8nResp.ok) {
-      const text = await n8nResp.text();
-      return res.status(502).json({ error: "Erro no N8N", status: n8nResp.status, body: text });
-    }
-
-    const n8nResult = await n8nResp.json();
-    return res.json({ success: true, n8n: n8nResult });
   } catch (err: any) {
+    console.error("Error in /run:", err);
     return res.status(500).json({ error: err.message });
   }
 });
+
+
 
 app.post("/truncate", async (_req: Request, res: Response) => {
   try {
