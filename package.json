@@ -5,9 +5,8 @@
   "license": "ISC",
   "author": "José Jonas Gomes da Silva Cavalcante",
   "type": "commonjs",
-  "main": "index.js",
+  "main": "dist/server.js",
   "scripts": {
-    "dev": "ts-node src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"
   },
