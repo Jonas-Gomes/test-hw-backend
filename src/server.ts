@@ -19,36 +19,15 @@ const {
   PORT = 4000,
 } = process.env;
 
-const DecryptKEY = Buffer.from(process.env.AES_KEY_BASE64!, "base64");
-
-const localKey = Buffer.from(process.env.AES_KEY_BASE64!, "base64");
-
-
-function encryptAes256Gcm(plaintext: string, key: Buffer) {
-  const iv = crypto.randomBytes(12); // 12 bytes para GCM
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([
-    cipher.update(plaintext, "utf8"),
-    cipher.final(),
-  ]);
-  const authTag = cipher.getAuthTag();
-
-  return {
-    encrypted: encrypted.toString("base64"),
-    iv: iv.toString("base64"),
-    authTag: authTag.toString("base64"),
-  };
-}
-
 function decryptAes256Gcm({ encrypted, iv, authTag, key }: {
   encrypted: string;
   iv: string;
   authTag: string;
-  key: string; // agora aceitando chave hex
+  key: string;
 }): string {
   const decipher = crypto.createDecipheriv(
     "aes-256-gcm",
-    Buffer.from(key, "hex"), // converte hex para 32 bytes
+    Buffer.from(key, "hex"), 
     Buffer.from(iv, "hex")
   );
   decipher.setAuthTag(Buffer.from(authTag, "hex"));
@@ -57,64 +36,12 @@ function decryptAes256Gcm({ encrypted, iv, authTag, key }: {
   return decrypted;
 }
 
-
-
-app.get("/internTest", async (_req: Request, res: Response) => {
-  try {
-    if (localKey.length !== 32) {
-      return res.status(500).json({ error: "AES_KEY must be 32 bytes" });
-    }
-
-    const sample = [
-      { name: "Jonas Gomes", email: "jonas@email.com", phone: "11999999999" },
-      { name: "Maria Silva", email: "maria@email.com", phone: "11988888888" },
-      { name: "Carlos Souza", email: "carlos@email.com", phone: "11977777777" },
-      { name: "Ana Pereira", email: "ana@email.com", phone: "11966666666" },
-      { name: "Luiz Oliveira", email: "luiz@email.com", phone: "11955555555" }
-    ];
-
-    // Encrypt and decrypt
-    const sampleStr = JSON.stringify(sample);
-    const encrypted = encryptAes256Gcm(sampleStr, localKey);
-    const decrypted = JSON.parse(
-      decryptAes256Gcm({
-        encrypted: encrypted.encrypted,
-        iv: encrypted.iv,
-        authTag: encrypted.authTag,
-        key: '',
-      })
-    );
-
-    // Send each user to addUser
-    const addUserResults: any[] = [];
-    for (const user of decrypted) {
-      // Call addUser directly with the user as req.body
-      await addUser(
-        { body: user } as Request,
-        {
-          status: (_code: number) => ({ json: (data: any) => addUserResults.push(data) }),
-        } as unknown as Response
-      );
-    }
-
-    return res.json({
-      plaintext: sample,
-      encrypted,
-      decrypted,
-      addUserResponse: addUserResults,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/run", async (_req: Request, res: Response) => {
+app.post("/decrypt", async (_req: Request, res: Response) => {
   try {
     if (!ENCRYPTED_ENDPOINT) {
       return res.status(500).json({ error: "ENCRYPTED_ENDPOINT is not configured" });
     }
 
-    // Buscar payload do endpoint seguro
     const resp = await fetch(ENCRYPTED_ENDPOINT);
     if (!resp.ok) {
       return res.status(502).json({ error: "Error fetching secure endpoint", status: resp.status });
@@ -128,17 +55,15 @@ app.post("/run", async (_req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid payload from secure endpoint" });
     }
 
-    // Descriptografar usando a chave que veio no payload
     const decryptedText = decryptAes256Gcm({
       encrypted,
       iv,
       authTag,
-      key: secretKey, // já vem no payload
+      key: secretKey,
     });
 
     const dataObj = JSON.parse(decryptedText);
 
-    // Reutilizar addUser
     let addUserResult: any;
     const fakeRes = {
       status: (_code: number) => ({
@@ -156,19 +81,17 @@ app.post("/run", async (_req: Request, res: Response) => {
       addUserResponse: addUserResult,
     });
   } catch (err: any) {
-    console.error("Error in /run:", err);
+    console.error("Error in /decrypt:", err);
     return res.status(500).json({ error: err.message });
   }
 });
-
-
 
 app.post("/truncate", async (_req: Request, res: Response) => {
   try {
     if (!process.env.N8N_TRUNCATE_WEBHOOK) {
       return res
         .status(500)
-        .json({ error: "N8N_TRUNCATE_WEBHOOK não configurado." });
+        .json({ error: "N8N_TRUNCATE_WEBHOOK is not configured." });
     }
 
     const resp = await fetch(process.env.N8N_TRUNCATE_WEBHOOK, {
@@ -179,7 +102,7 @@ app.post("/truncate", async (_req: Request, res: Response) => {
     if (!resp.ok) {
       const txt = await resp.text();
       return res.status(502).json({
-        error: "Erro no truncate",
+        error: "Error on truncate",
         status: resp.status,
         body: txt,
       });
